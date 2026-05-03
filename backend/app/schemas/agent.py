@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class MCPServer(BaseModel):
@@ -13,35 +13,44 @@ class MCPServer(BaseModel):
     transport: str = Field(default="sse", pattern="^(sse|stdio|websocket)$")
 
 
+LLMProvider = Literal["openai", "anthropic", "google", "openai_compatible"]
+
+
 class AgentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str = Field(default="")
     system_prompt: str = Field(default="")
+    llm_provider: LLMProvider = Field(default="openai")
     llm_model: str = Field(default="gpt-4o", min_length=1, max_length=100)
+    llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    llm_max_tokens: int = Field(default=4096, ge=1, le=128000)
+    llm_base_url: Optional[str] = Field(default=None)
+    llm_api_key: Optional[str] = Field(default=None)
     mcp_servers: List[MCPServer] = Field(default_factory=list)
     is_supervisor: bool = Field(default=False)
     worker_agent_ids: List[uuid.UUID] = Field(default_factory=list)
 
     @field_validator("mcp_servers", mode="before")
     @classmethod
-    def validate_mcp_servers(cls, v: Any) -> Any:
-        if v is None:
-            return []
-        return v
+    def _coerce_mcp_servers(cls, v: Any) -> Any:
+        return v if v is not None else []
 
     @field_validator("worker_agent_ids", mode="before")
     @classmethod
-    def validate_worker_agent_ids(cls, v: Any) -> Any:
-        if v is None:
-            return []
-        return v
+    def _coerce_worker_ids(cls, v: Any) -> Any:
+        return v if v is not None else []
 
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     system_prompt: Optional[str] = None
+    llm_provider: Optional[LLMProvider] = None
     llm_model: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    llm_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    llm_max_tokens: Optional[int] = Field(default=None, ge=1, le=128000)
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
     mcp_servers: Optional[List[MCPServer]] = None
     is_supervisor: Optional[bool] = None
     worker_agent_ids: Optional[List[uuid.UUID]] = None
@@ -54,12 +63,22 @@ class AgentResponse(BaseModel):
     name: str
     description: str
     system_prompt: str
+    llm_provider: str
     llm_model: str
+    llm_temperature: float
+    llm_max_tokens: int
+    llm_base_url: Optional[str]
+    llm_api_key: None = None  # never exposed
     mcp_servers: List[MCPServer]
     is_supervisor: bool
     worker_agent_ids: List[uuid.UUID]
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _redact_api_key(self) -> AgentResponse:
+        object.__setattr__(self, "llm_api_key", None)
+        return self
 
 
 class AgentListResponse(BaseModel):

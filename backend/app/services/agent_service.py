@@ -12,6 +12,18 @@ from app.models.agent import Agent
 from app.schemas.agent import AgentCreate, AgentUpdate
 
 
+def _maybe_encrypt(plaintext: Optional[str]) -> Optional[str]:
+    if not plaintext:
+        return None
+    from app.config import settings
+
+    if not settings.FERNET_KEY:
+        return plaintext  # store as-is when no key configured (dev mode)
+    from app.core.llm_factory import encrypt_api_key
+
+    return encrypt_api_key(plaintext)
+
+
 class AgentService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -21,7 +33,12 @@ class AgentService:
             name=data.name,
             description=data.description,
             system_prompt=data.system_prompt,
+            llm_provider=data.llm_provider,
             llm_model=data.llm_model,
+            llm_temperature=data.llm_temperature,
+            llm_max_tokens=data.llm_max_tokens,
+            llm_base_url=data.llm_base_url,
+            llm_api_key=_maybe_encrypt(data.llm_api_key),
             mcp_servers=[s.model_dump() for s in data.mcp_servers],
             is_supervisor=data.is_supervisor,
             worker_agent_ids=[str(wid) for wid in data.worker_agent_ids],
@@ -65,6 +82,9 @@ class AgentService:
         if "worker_agent_ids" in update_data and update_data["worker_agent_ids"] is not None:
             update_data["worker_agent_ids"] = [str(wid) for wid in data.worker_agent_ids]  # type: ignore[union-attr]
 
+        if "llm_api_key" in update_data:
+            update_data["llm_api_key"] = _maybe_encrypt(update_data["llm_api_key"])
+
         for field, value in update_data.items():
             setattr(agent, field, value)
 
@@ -75,9 +95,16 @@ class AgentService:
             await self.db.rollback()
             raise AgentNameConflictError(data.name or "")
 
+        # Invalidate engine cache for this agent
+        from app.core.agent_engine import agent_engine
+        agent_engine.invalidate(str(agent_id))
+
         return agent
 
     async def delete(self, agent_id: uuid.UUID) -> None:
         agent = await self.get(agent_id)
         await self.db.delete(agent)
         await self.db.flush()
+
+        from app.core.agent_engine import agent_engine
+        agent_engine.invalidate(str(agent_id))

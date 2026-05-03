@@ -23,6 +23,7 @@ from app.core.exceptions import (
 from app.core.middleware import RequestIDMiddleware, RequestLoggingMiddleware
 from app.database import check_db_connection, close_db
 from app.routers.agents import router as agents_router
+from app.routers.ws import router as ws_router
 
 
 class _DefaultRequestIDFilter(logging.Filter):
@@ -131,3 +132,4 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 
 # --- Routers ---
 app.include_router(agents_router, prefix="/api/v1")
+app.include_router(ws_router, prefix="/api/v1")
