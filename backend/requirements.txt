@@ -22,3 +22,4 @@ sse-starlette==1.8.2
 # Security & utilities
 cryptography==44.0.0
 tenacity==9.0.0
+prometheus-client==0.21.1
