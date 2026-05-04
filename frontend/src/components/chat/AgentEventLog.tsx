@@ -12,14 +12,33 @@ import {
   XCircle,
   ChevronDown,
   ChevronRight,
+  Copy,
+  Download,
 } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
 import type { AgentEvent } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
-function formatEventTime(timestamp?: string): string {
-  const d = timestamp ? new Date(timestamp) : new Date()
+type FilterType = 'all' | 'tools' | 'routing' | 'errors'
+
+const FILTER_OPTIONS: { value: FilterType; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'tools', label: 'Tools' },
+  { value: 'routing', label: 'Routing' },
+  { value: 'errors', label: 'Errors' },
+]
+
+function matchesFilter(event: AgentEvent, filter: FilterType): boolean {
+  if (filter === 'all') return true
+  if (filter === 'tools') return event.type === 'tool_call' || event.type === 'tool_result'
+  if (filter === 'routing') return event.type === 'supervisor_routing'
+  if (filter === 'errors') return event.type === 'error'
+  return true
+}
+
+function formatEventTime(isoOrNow?: string): string {
+  const d = isoOrNow ? new Date(isoOrNow) : new Date()
   return d.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
@@ -28,6 +47,21 @@ function formatEventTime(timestamp?: string): string {
   })
 }
 
+// ── Copy-to-clipboard helper ───────────────────────────────────────────────
+
+function useCopy(): [boolean, (text: string) => void] {
+  const [copied, setCopied] = useState(false)
+  const copy = useCallback((text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [])
+  return [copied, copy]
+}
+
+// ── ExpandableJson with copy button ───────────────────────────────────────
+
 interface ExpandableJsonProps {
   label: string
   data: unknown
@@ -35,40 +69,54 @@ interface ExpandableJsonProps {
 
 function ExpandableJson({ label, data }: ExpandableJsonProps) {
   const [expanded, setExpanded] = useState(false)
+  const [, copy] = useCopy()
+  const text = JSON.stringify(data, null, 2)
 
   return (
     <div>
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1 text-[#71717a] hover:text-[#f4f4f5] transition-colors"
-      >
-        {expanded
-          ? <ChevronDown className="h-3 w-3" />
-          : <ChevronRight className="h-3 w-3" />
-        }
-        <span>{label}</span>
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="flex items-center gap-1 text-[#71717a] hover:text-[#f4f4f5] transition-colors"
+        >
+          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <span>{label}</span>
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); copy(text) }}
+          className="ml-1 text-[#3f3f46] hover:text-[#71717a] transition-colors"
+          title="Copy JSON"
+        >
+          <Copy className="h-3 w-3" />
+        </button>
+      </div>
       {expanded && (
         <pre className="mt-1 ml-4 p-2 rounded bg-[#0d0d0d] border border-[#1f1f1f] text-[10px] text-[#a1a1aa] overflow-x-auto max-w-full whitespace-pre-wrap break-all">
-          {JSON.stringify(data, null, 2)}
+          {text}
         </pre>
       )}
     </div>
   )
 }
 
+// ── EventRow ───────────────────────────────────────────────────────────────
+
 interface EventRowProps {
   event: AgentEvent
 }
 
 function EventRow({ event }: EventRowProps) {
-  // Skip token events entirely
-  if (event.type === 'token' || event.type === 'done' || event.type === 'connected' || event.type === 'ping') {
+  if (
+    event.type === 'token' ||
+    event.type === 'done' ||
+    event.type === 'connected' ||
+    event.type === 'ping' ||
+    event.type === 'server_restart'
+  ) {
     return null
   }
 
   const timestamp = 'timestamp' in event ? (event as { timestamp?: string }).timestamp : undefined
-
   const baseClass = 'font-mono text-xs leading-relaxed'
 
   const renderContent = () => {
@@ -88,9 +136,7 @@ function EventRow({ event }: EventRowProps) {
           <div className="flex items-start gap-1.5">
             <Brain className="h-3.5 w-3.5 text-[#71717a] shrink-0 mt-0.5" />
             <span className={cn(baseClass, 'text-[#71717a]')}>
-              {event.content.length > 100
-                ? `${event.content.slice(0, 100)}…`
-                : event.content}
+              {event.content.length > 100 ? `${event.content.slice(0, 100)}…` : event.content}
             </span>
           </div>
         )
@@ -100,10 +146,7 @@ function EventRow({ event }: EventRowProps) {
           <div className="flex items-start gap-1.5">
             <Wrench className="h-3.5 w-3.5 text-yellow-400 shrink-0 mt-0.5" />
             <div className={cn(baseClass, 'text-yellow-400')}>
-              <ExpandableJson
-                label={`Calling: ${event.tool_name}`}
-                data={event.tool_input}
-              />
+              <ExpandableJson label={`Calling: ${event.tool_name}`} data={event.tool_input} />
             </div>
           </div>
         )
@@ -113,10 +156,7 @@ function EventRow({ event }: EventRowProps) {
           <div className="flex items-start gap-1.5">
             <CheckCircle className="h-3.5 w-3.5 text-[#22c55e] shrink-0 mt-0.5" />
             <div className={cn(baseClass, 'text-[#22c55e]')}>
-              <ExpandableJson
-                label={`${event.tool_name} returned`}
-                data={event.result}
-              />
+              <ExpandableJson label={`${event.tool_name} returned`} data={event.result} />
             </div>
           </div>
         )
@@ -127,9 +167,7 @@ function EventRow({ event }: EventRowProps) {
             <ArrowRightLeft className="h-3.5 w-3.5 text-purple-400 shrink-0 mt-0.5" />
             <span className={cn(baseClass, 'text-purple-400')}>
               → {event.to_agent}
-              {event.reason && (
-                <span className="text-[#71717a] ml-1">({event.reason})</span>
-              )}
+              {event.reason && <span className="text-[#71717a] ml-1">({event.reason})</span>}
             </span>
           </div>
         )
@@ -146,9 +184,7 @@ function EventRow({ event }: EventRowProps) {
         return (
           <div className="flex items-start gap-1.5">
             <XCircle className="h-3.5 w-3.5 text-[#ef4444] shrink-0 mt-0.5" />
-            <span className={cn(baseClass, 'text-[#ef4444]')}>
-              {event.message}
-            </span>
+            <span className={cn(baseClass, 'text-[#ef4444]')}>{event.message}</span>
           </div>
         )
 
@@ -170,20 +206,24 @@ function EventRow({ event }: EventRowProps) {
   )
 }
 
-// Filter out non-renderable events before virtualizing
-const SKIP_TYPES = new Set(['token', 'done', 'connected', 'ping'])
+// ── Main component ─────────────────────────────────────────────────────────
+
+const SKIP_TYPES = new Set(['token', 'done', 'connected', 'ping', 'server_restart'])
 
 export function AgentEventLog() {
   const events = useChatStore((s) => s.events)
   const clearEvents = useChatStore((s) => s.clearEvents)
 
-  const visibleEvents = events.filter((e) => !SKIP_TYPES.has(e.type))
-  const useVirtualized = visibleEvents.length > 100
+  const [filter, setFilter] = useState<FilterType>('all')
 
+  const visibleEvents = events.filter(
+    (e) => !SKIP_TYPES.has(e.type) && matchesFilter(e, filter),
+  )
+
+  const useVirtualized = visibleEvents.length > 100
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scroll to bottom when new events arrive
   useEffect(() => {
     if (!useVirtualized && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'smooth' })
@@ -197,12 +237,34 @@ export function AgentEventLog() {
     overscan: 10,
   })
 
-  // Auto-scroll virtualizer to bottom
   useEffect(() => {
     if (useVirtualized && visibleEvents.length > 0) {
       virtualizer.scrollToIndex(visibleEvents.length - 1, { behavior: 'smooth' })
     }
   }, [visibleEvents.length, useVirtualized, virtualizer])
+
+  const handleExport = () => {
+    const all = events.filter((e) => !SKIP_TYPES.has(e.type))
+    const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `agent-events-${Date.now()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Count by category for filter badges
+  const toolCount = events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result').length
+  const routingCount = events.filter((e) => e.type === 'supervisor_routing').length
+  const errorCount = events.filter((e) => e.type === 'error').length
+
+  const filterCount: Record<FilterType, number> = {
+    all: events.filter((e) => !SKIP_TYPES.has(e.type)).length,
+    tools: toolCount,
+    routing: routingCount,
+    errors: errorCount,
+  }
 
   return (
     <div className="flex flex-col h-full bg-[#0a0a0a] border-l border-[#1f1f1f]">
@@ -212,27 +274,56 @@ export function AgentEventLog() {
           <span className="text-xs font-medium text-[#71717a] uppercase tracking-wider">
             Event Log
           </span>
-          {visibleEvents.length > 0 && (
+          {filterCount.all > 0 && (
             <span className="text-[10px] font-mono text-[#3f3f46] bg-[#111111] border border-[#1f1f1f] rounded-full px-1.5 py-0.5">
-              {visibleEvents.length}
+              {filterCount.all}
             </span>
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={clearEvents}
-          className="h-6 px-2 text-[10px] text-[#71717a] hover:text-[#f4f4f5]"
-        >
-          Clear log
-        </Button>
+        <div className="flex items-center gap-1">
+          {filterCount.all > 0 && (
+            <button
+              onClick={handleExport}
+              className="h-6 px-2 text-[10px] text-[#71717a] hover:text-[#f4f4f5] flex items-center gap-1 rounded transition-colors"
+              title="Export events as JSON"
+            >
+              <Download className="h-3 w-3" />
+            </button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearEvents}
+            className="h-6 px-2 text-[10px] text-[#71717a] hover:text-[#f4f4f5]"
+          >
+            Clear
+          </Button>
+        </div>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-[#1f1f1f] shrink-0">
+        {FILTER_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => setFilter(opt.value)}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors',
+              filter === opt.value
+                ? 'bg-[#1f1f1f] text-[#f4f4f5]'
+                : 'text-[#71717a] hover:text-[#f4f4f5]',
+            )}
+          >
+            {opt.label}
+            {filterCount[opt.value] > 0 && (
+              <span className="text-[#3f3f46] font-mono">{filterCount[opt.value]}</span>
+            )}
+          </button>
+        ))}
       </div>
 
       {/* Events */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto"
-      >
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {visibleEvents.length === 0 ? (
           <div className="flex items-center justify-center h-full px-4 py-8">
             <p className="text-xs text-[#3f3f46] font-mono text-center">
@@ -242,10 +333,7 @@ export function AgentEventLog() {
             </p>
           </div>
         ) : useVirtualized ? (
-          // Virtualized list for > 100 events
-          <div
-            style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}
-          >
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
             {virtualizer.getVirtualItems().map((vItem) => {
               const event = visibleEvents[vItem.index]
               return (
@@ -267,7 +355,6 @@ export function AgentEventLog() {
             })}
           </div>
         ) : (
-          // Standard list for <= 100 events
           <div className="py-1">
             {visibleEvents.map((event, idx) => (
               <EventRow key={idx} event={event} />

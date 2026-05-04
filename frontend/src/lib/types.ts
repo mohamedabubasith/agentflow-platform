@@ -104,7 +104,12 @@ export interface WSEventDone {
   type: 'done'
   full_response: string
   total_duration_ms: number
-  tokens_used: number
+  tokens_used: { prompt: number; completion: number; total: number }
+}
+
+export interface WSEventServerRestart {
+  type: 'server_restart'
+  message: string
 }
 
 export interface WSEventError {
@@ -129,6 +134,7 @@ export type AgentEvent =
   | WSEventDone
   | WSEventError
   | WSEventPing
+  | WSEventServerRestart
 
 export type WSConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -144,6 +150,37 @@ export interface MCPOverrideEntry {
   name: string
   url: string
   transport: 'sse' | 'stdio' | 'websocket'
+}
+
+// RunHistory types
+export interface RunHistory {
+  id: string
+  agent_id: string
+  conversation_id: string
+  user_message: string
+  assistant_response: string
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  duration_ms: number
+  mcp_servers_used: { name: string; url: string }[]
+  error: string | null
+  created_at: string
+}
+
+export interface RunHistoryListResponse {
+  items: RunHistory[]
+  total: number
+  skip: number
+  limit: number
+}
+
+export interface RunStatsResponse {
+  total_runs: number
+  total_tokens: number
+  avg_duration_ms: number
+  runs_last_7_days: number
+  most_used_tools: { name: string; count: number }[]
 }
 
 export const PROVIDER_MODELS: Record<LLMProvider, string[]> = {

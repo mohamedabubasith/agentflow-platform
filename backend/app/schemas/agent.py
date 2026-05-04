@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -92,3 +92,68 @@ class HealthResponse(BaseModel):
     status: str
     db: str
     version: str
+
+
+# ── RunHistory schemas ─────────────────────────────────────────────────────
+
+class RunHistoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    conversation_id: str
+    user_message: str
+    assistant_response: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    duration_ms: int
+    mcp_servers_used: List[Any]
+    error: Optional[str]
+    created_at: datetime
+
+
+class RunHistoryListResponse(BaseModel):
+    items: List[RunHistoryResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class RunStatsResponse(BaseModel):
+    total_runs: int
+    total_tokens: int
+    avg_duration_ms: float
+    runs_last_7_days: int
+    most_used_tools: List[Dict[str, Any]]
+
+
+# ── MCP test schemas ───────────────────────────────────────────────────────
+
+class MCPTestRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+    transport: str = Field(default="sse", pattern="^(sse|stdio|websocket)$")
+
+
+class MCPTestResponse(BaseModel):
+    healthy: bool
+    tools_count: int
+    error: Optional[str]
+
+
+class MCPToolInfo(BaseModel):
+    name: str
+    description: Optional[str]
+
+
+# ── Info schema ────────────────────────────────────────────────────────────
+
+class InfoResponse(BaseModel):
+    name: str
+    version: str
+    env: str
+    providers_configured: List[str]
+    agent_count: int
+    active_websockets: int
+    cache_size: int
+    cache_maxsize: int

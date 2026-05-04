@@ -8,10 +8,10 @@ import {
   type KeyboardEvent,
   type ChangeEvent,
 } from 'react'
-import { AlertCircle, Wifi, WifiOff, Settings2 } from 'lucide-react'
+import { AlertCircle, Wifi, WifiOff, Settings2, ArrowDown, Activity } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
 import { WebSocketClient } from '@/lib/websocket'
-import type { AgentEvent, ConversationMessage } from '@/lib/types'
+import type { AgentEvent, ConversationMessage, WSEventDone } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -32,13 +32,19 @@ function generateId(): string {
 
 const MAX_CHARS = 4000
 
+function latencyColor(ms: number): string {
+  if (ms === 0) return 'text-[#3f3f46]'
+  if (ms < 80) return 'text-[#22c55e]'
+  if (ms < 250) return 'text-yellow-400'
+  return 'text-[#ef4444]'
+}
+
 export function ChatWindow({
   agentId,
   conversationId,
   agentName,
   llmModel,
 }: ChatWindowProps) {
-  // Store selectors
   const messages = useChatStore((s) => s.messages)
   const wsState = useChatStore((s) => s.wsState)
   const isStreaming = useChatStore((s) => s.isStreaming)
@@ -57,25 +63,36 @@ export function ChatWindow({
   const clearMessages = useChatStore((s) => s.clearMessages)
   const clearEvents = useChatStore((s) => s.clearEvents)
 
-  // Local UI state
   const [input, setInput] = useState('')
   const [showMcpPanel, setShowMcpPanel] = useState(false)
+  const [latencyMs, setLatencyMs] = useState(0)
+  const [lastTokenUsage, setLastTokenUsage] = useState<WSEventDone['tokens_used'] | null>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const [serverRestarting, setServerRestarting] = useState(false)
 
-  // Refs — stable across renders, no effect re-runs
   const wsRef = useRef<WebSocketClient | null>(null)
   const wsCleanupRef = useRef<(() => void) | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  // Track the streaming message id in a ref so the event handler always has it fresh
   const streamingIdRef = useRef<string | null>(null)
 
-  // Keep streamingIdRef in sync with store
   useEffect(() => {
     streamingIdRef.current = currentStreamingId
   }, [currentStreamingId])
 
-  // Process incoming WS events
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior })
+  }, [])
+
+  // Track scroll position to show/hide scroll-to-bottom button
+  const handleScroll = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    setIsAtBottom(distFromBottom < 60)
+  }, [])
+
   const handleEvent = useCallback(
     (event: AgentEvent) => {
       switch (event.type) {
@@ -84,18 +101,16 @@ export function ChatWindow({
           if (sid) {
             appendToken(sid, event.content)
           } else {
-            // No streaming message yet — create one
             const newId = generateId()
             streamingIdRef.current = newId
             setCurrentStreamingId(newId)
-            const msg: ConversationMessage = {
+            addMessage({
               id: newId,
               role: 'assistant',
               content: event.content,
               timestamp: new Date().toISOString(),
               isStreaming: true,
-            }
-            addMessage(msg)
+            })
           }
           break
         }
@@ -108,6 +123,7 @@ export function ChatWindow({
             setCurrentStreamingId(null)
           }
           setIsStreaming(false)
+          setLastTokenUsage(event.tokens_used)
           break
         }
 
@@ -123,6 +139,12 @@ export function ChatWindow({
           setIsStreaming(false)
           streamingIdRef.current = null
           setCurrentStreamingId(null)
+          break
+        }
+
+        case 'server_restart': {
+          setServerRestarting(true)
+          addEvent(event)
           break
         }
 
@@ -147,23 +169,25 @@ export function ChatWindow({
     ],
   )
 
-  // WS lifecycle — runs once on mount, cleans up on unmount
   useEffect(() => {
     const client = new WebSocketClient()
     wsRef.current = client
 
     const unsubEvent = client.onEvent(handleEvent)
-    const unsubState = client.onStateChange(setWsState)
+    const unsubState = client.onStateChange((state) => {
+      setWsState(state)
+      if (state === 'connected') setServerRestarting(false)
+    })
+    const unsubLatency = client.onLatencyChange(setLatencyMs)
 
     wsCleanupRef.current = () => {
       unsubEvent()
       unsubState()
+      unsubLatency()
       client.disconnect()
     }
 
-    client.connect(agentId, conversationId).catch(() => {
-      // Error state is set via onStateChange
-    })
+    client.connect(agentId, conversationId).catch(() => {})
 
     return () => {
       wsCleanupRef.current?.()
@@ -173,17 +197,17 @@ export function ChatWindow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId, conversationId])
 
-  // Auto-scroll messages to bottom
+  // Auto-scroll to bottom when new messages arrive, if already at bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length])
+    if (isAtBottom) {
+      scrollToBottom()
+    }
+  }, [messages.length, isAtBottom, scrollToBottom])
 
-  // Auto-resize textarea
   const handleInputChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value
     if (val.length > MAX_CHARS) return
     setInput(val)
-    // Reset height then grow
     const el = e.target
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
@@ -193,24 +217,19 @@ export function ChatWindow({
     const text = input.trim()
     if (!text || isStreaming) return
 
-    // Add user message to store
-    const userMsg: ConversationMessage = {
+    addMessage({
       id: generateId(),
       role: 'user',
       content: text,
       timestamp: new Date().toISOString(),
-    }
-    addMessage(userMsg)
+    })
 
-    // Send via WS
     wsRef.current?.send(text, mcpOverrides.length > 0 ? mcpOverrides : undefined)
-
-    // Clear input
     setInput('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-  }, [input, isStreaming, addMessage, mcpOverrides])
+    setLastTokenUsage(null)
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    scrollToBottom()
+  }, [input, isStreaming, addMessage, mcpOverrides, scrollToBottom])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -220,21 +239,24 @@ export function ChatWindow({
   }
 
   const handleReconnect = () => {
-    // Tear down existing connection cleanly
     wsCleanupRef.current?.()
     wsCleanupRef.current = null
     wsRef.current = null
 
-    // Create a fresh client
     const client = new WebSocketClient()
     wsRef.current = client
 
     const unsubEvent = client.onEvent(handleEvent)
-    const unsubState = client.onStateChange(setWsState)
+    const unsubState = client.onStateChange((state) => {
+      setWsState(state)
+      if (state === 'connected') setServerRestarting(false)
+    })
+    const unsubLatency = client.onLatencyChange(setLatencyMs)
 
     wsCleanupRef.current = () => {
       unsubEvent()
       unsubState()
+      unsubLatency()
       client.disconnect()
     }
 
@@ -244,6 +266,7 @@ export function ChatWindow({
   const handleClear = () => {
     clearMessages()
     clearEvents()
+    setLastTokenUsage(null)
   }
 
   const canSend = input.trim().length > 0 && !isStreaming
@@ -268,6 +291,16 @@ export function ChatWindow({
             )}
             title={wsState}
           />
+          {/* Latency indicator */}
+          {wsState === 'connected' && latencyMs > 0 && (
+            <span
+              className={cn('text-[10px] font-mono tabular-nums flex items-center gap-0.5', latencyColor(latencyMs))}
+              title="WebSocket latency"
+            >
+              <Activity className="h-2.5 w-2.5" />
+              {latencyMs}ms
+            </span>
+          )}
         </div>
         <Button
           variant="ghost"
@@ -284,11 +317,19 @@ export function ChatWindow({
         </Button>
       </div>
 
-      {/* MCP Override panel — collapses/expands */}
       {showMcpPanel && <MCPOverride />}
 
-      {/* Connection status banners */}
-      {wsState === 'error' && (
+      {/* Server restart notice */}
+      {serverRestarting && (
+        <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
+          <Wifi className="h-4 w-4 text-yellow-400 shrink-0 animate-pulse" />
+          <p className="text-xs text-yellow-400 flex-1">
+            Server is restarting — reconnecting…
+          </p>
+        </div>
+      )}
+
+      {wsState === 'error' && !serverRestarting && (
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-[#ef4444]/10 border-b border-[#ef4444]/20">
           <WifiOff className="h-4 w-4 text-[#ef4444] shrink-0" />
           <p className="text-xs text-[#ef4444] flex-1">
@@ -304,7 +345,7 @@ export function ChatWindow({
           </Button>
         </div>
       )}
-      {wsState === 'connecting' && (
+      {wsState === 'connecting' && !serverRestarting && (
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
           <Wifi className="h-4 w-4 text-yellow-400 shrink-0 animate-pulse" />
           <p className="text-xs text-yellow-400">Connecting to agent...</p>
@@ -312,14 +353,16 @@ export function ChatWindow({
       )}
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto relative"
+      >
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full px-8">
             <div className="text-center space-y-2">
               <AlertCircle className="h-8 w-8 text-[#3f3f46] mx-auto" />
-              <p className="text-sm text-[#71717a]">
-                Send a message to start the conversation
-              </p>
+              <p className="text-sm text-[#71717a]">Send a message to start the conversation</p>
               <p className="text-xs text-[#3f3f46]">
                 Talking to <span className="text-[#71717a]">{agentName}</span>
               </p>
@@ -331,13 +374,29 @@ export function ChatWindow({
               <MessageBubble key={msg.id} message={msg} />
             ))}
             {isStreaming && (
-              <StreamingIndicator
-                agentName={streamingAgentName || agentName}
-                eventType={null}
-              />
+              <StreamingIndicator agentName={streamingAgentName || agentName} eventType={null} />
+            )}
+            {/* Token usage after the last run */}
+            {!isStreaming && lastTokenUsage && (
+              <div className="flex justify-end">
+                <span className="text-[10px] font-mono text-[#3f3f46] bg-[#111111] border border-[#1f1f1f] rounded px-2 py-0.5">
+                  {lastTokenUsage.prompt}↑ {lastTokenUsage.completion}↓ {lastTokenUsage.total} tokens
+                </span>
+              </div>
             )}
             <div ref={messagesEndRef} />
           </div>
+        )}
+
+        {/* Scroll-to-bottom FAB */}
+        {!isAtBottom && (
+          <button
+            onClick={() => scrollToBottom()}
+            className="absolute bottom-4 right-4 h-8 w-8 rounded-full bg-[#1f1f1f] border border-[#2f2f2f] flex items-center justify-center text-[#71717a] hover:text-[#f4f4f5] transition-colors shadow-lg"
+            aria-label="Scroll to bottom"
+          >
+            <ArrowDown className="h-4 w-4" />
+          </button>
         )}
       </div>
 
@@ -359,19 +418,14 @@ export function ChatWindow({
             style={{ height: 'auto' }}
             disabled={wsState === 'error' || wsState === 'disconnected'}
           />
-          {/* Character count */}
           <div className="flex items-center justify-between px-3 pb-2 pt-0">
             <span
               className={cn(
                 'text-[10px] font-mono',
-                input.length > MAX_CHARS * 0.9
-                  ? 'text-[#ef4444]'
-                  : 'text-[#3f3f46]',
+                input.length > MAX_CHARS * 0.9 ? 'text-[#ef4444]' : 'text-[#3f3f46]',
               )}
             >
-              {input.length > 0
-                ? `${input.length} / ${MAX_CHARS}`
-                : ''}
+              {input.length > 0 ? `${input.length} / ${MAX_CHARS}` : ''}
             </span>
             <div className="flex items-center gap-2">
               <Button

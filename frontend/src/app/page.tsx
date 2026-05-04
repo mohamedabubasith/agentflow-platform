@@ -3,9 +3,12 @@
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { Plus, Search, Bot, Sparkles } from 'lucide-react'
-import { useAgents } from '@/lib/api'
+import { useAgents, useCreateAgent } from '@/lib/api'
+import type { AgentCreate } from '@/lib/types'
 import { AgentCard } from '@/components/agents/AgentCard'
+import { AgentImportExport } from '@/components/agents/AgentImportExport'
 import { Header } from '@/components/layout/Header'
+import { useToast } from '@/components/ui/toast'
 
 function EmptyState() {
   return (
@@ -31,6 +34,19 @@ function EmptyState() {
 export default function HomePage() {
   const [search, setSearch] = useState('')
   const { data, isLoading, error } = useAgents()
+  const createAgent = useCreateAgent()
+  const { toast } = useToast()
+
+  const handleImportAgents = async (agentsToImport: AgentCreate[]) => {
+    let created = 0
+    for (const a of agentsToImport) {
+      try {
+        await createAgent.mutateAsync(a)
+        created++
+      } catch {}
+    }
+    toast({ title: `Imported ${created} agent${created !== 1 ? 's' : ''}`, variant: 'success' })
+  }
 
   const agents = useMemo(() => {
     const all = data?.items ?? []
@@ -46,13 +62,19 @@ export default function HomePage() {
   return (
     <div className="flex flex-col h-full">
       <Header title="Agents">
-        <Link
-          href="/agents/new"
-          className="inline-flex items-center gap-2 bg-primary hover:bg-primary-hover text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          New Agent
-        </Link>
+        <div className="flex items-center gap-3">
+          <AgentImportExport
+            agents={data?.items ?? []}
+            onImport={handleImportAgents}
+          />
+          <Link
+            href="/agents/new"
+            className="inline-flex items-center gap-2 bg-primary hover:bg-primary-hover text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            New Agent
+          </Link>
+        </div>
       </Header>
 
       <div className="flex-1 p-6">

@@ -1,3 +1,3 @@
-from app.models.agent import Agent
+from app.models.agent import Agent, RunHistory
 
-__all__ = ["Agent"]
+__all__ = ["Agent", "RunHistory"]

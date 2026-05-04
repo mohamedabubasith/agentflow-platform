@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
@@ -12,7 +13,7 @@ from app.core.agent_engine import _RUN_SEMAPHORE, agent_engine
 from app.core.mcp_manager import MCPManager
 from app.core.websocket_manager import ws_manager
 from app.database import AsyncSessionLocal
-from app.models.agent import Agent
+from app.models.agent import Agent, RunHistory
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,14 @@ class RunService:
             run_id, agent_id, conversation_id,
         )
 
+        # Per-connection rate limiting
+        if not ws_manager.check_rate_limit(ws_client_id):
+            await ws_manager.send_event(
+                ws_client_id,
+                {"type": "error", "code": "rate_limited", "message": "Message rate limit exceeded (60/min)."},
+            )
+            return
+
         try:
             async with asyncio.timeout(_RUN_TIMEOUT):
                 async with _RUN_SEMAPHORE:
@@ -51,6 +60,18 @@ class RunService:
                 ws_client_id,
                 {"type": "error", "code": "timeout", "message": "Agent run exceeded 5 minute limit."},
             )
+            await self._save_run_history(
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                user_message=message,
+                assistant_response="",
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                duration_ms=_RUN_TIMEOUT * 1000,
+                mcp_servers_used=[],
+                error="timeout",
+            )
         except asyncio.CancelledError:
             logger.info("rid=- run_id=%s CANCELLED (client disconnected)", run_id)
         except Exception as exc:
@@ -58,6 +79,18 @@ class RunService:
             await ws_manager.send_event(
                 ws_client_id,
                 {"type": "error", "code": "run_error", "message": str(exc)},
+            )
+            await self._save_run_history(
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                user_message=message,
+                assistant_response="",
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                duration_ms=0,
+                mcp_servers_used=[],
+                error=str(exc),
             )
 
     async def _execute(
@@ -71,7 +104,6 @@ class RunService:
     ) -> None:
         agent, workers = await self._load_agent_configs(agent_id)
 
-        # Build overridden MCP servers list if provided
         mcp_servers = list(agent.mcp_servers or [])
         if mcp_override:
             mcp_servers = [
@@ -81,7 +113,6 @@ class RunService:
 
         start_ts = time.time()
 
-        # Notify run start
         await ws_manager.send_event(
             ws_client_id,
             {"type": "agent_start", "agent_name": agent.name, "timestamp": _iso()},
@@ -95,7 +126,7 @@ class RunService:
             else:
                 graph = await agent_engine.build_agent(agent, tools_override=tools)
 
-            full_response, tokens_used = await self._stream_graph(
+            full_response, prompt_tokens, completion_tokens, total_tokens = await self._stream_graph(
                 graph=graph,
                 agent=agent,
                 conversation_id=conversation_id,
@@ -111,8 +142,25 @@ class RunService:
                 "type": "done",
                 "full_response": full_response,
                 "total_duration_ms": total_ms,
-                "tokens_used": tokens_used,
+                "tokens_used": {
+                    "prompt": prompt_tokens,
+                    "completion": completion_tokens,
+                    "total": total_tokens,
+                },
             },
+        )
+
+        await self._save_run_history(
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            user_message=message,
+            assistant_response=full_response,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            duration_ms=total_ms,
+            mcp_servers_used=[{"name": s.get("name", s.get("url")), "url": s.get("url")} for s in mcp_servers],
+            error=None,
         )
 
     async def _stream_graph(
@@ -123,13 +171,15 @@ class RunService:
         message: str,
         ws_client_id: str,
         run_id: str,
-    ) -> tuple[str, int]:
-        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+    ) -> tuple[str, int, int, int]:
+        from langchain_core.messages import HumanMessage
 
         thread_config = {"configurable": {"thread_id": conversation_id}}
         input_state = {"messages": [HumanMessage(content=message)]}
 
-        full_tokens = 0
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
         response_parts: list[str] = []
 
         async for event in graph.astream_events(
@@ -154,7 +204,10 @@ class RunService:
             elif kind == "on_chat_model_end":
                 output = data.get("output")
                 if output and hasattr(output, "usage_metadata") and output.usage_metadata:
-                    full_tokens += output.usage_metadata.get("total_tokens", 0)
+                    meta = output.usage_metadata
+                    prompt_tokens += meta.get("input_tokens", 0)
+                    completion_tokens += meta.get("output_tokens", 0)
+                    total_tokens += meta.get("total_tokens", 0)
 
             elif kind == "on_tool_start":
                 tool_input = data.get("input", {})
@@ -186,7 +239,7 @@ class RunService:
             {"type": "agent_end", "agent_name": agent.name, "timestamp": _iso()},
         )
 
-        return "".join(response_parts), full_tokens
+        return "".join(response_parts), prompt_tokens, completion_tokens, total_tokens
 
     async def _load_agent_configs(self, agent_id: uuid.UUID) -> tuple[Agent, list[Agent]]:
         async with AsyncSessionLocal() as session:
@@ -203,7 +256,42 @@ class RunService:
 
             return agent, workers
 
+    async def _save_run_history(
+        self,
+        agent_id: uuid.UUID,
+        conversation_id: str,
+        user_message: str,
+        assistant_response: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        duration_ms: int,
+        mcp_servers_used: List[Dict[str, Any]],
+        error: Optional[str],
+    ) -> None:
+        try:
+            async with AsyncSessionLocal() as session:
+                run = RunHistory(
+                    agent_id=agent_id,
+                    conversation_id=conversation_id,
+                    user_message=user_message,
+                    assistant_response=assistant_response,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    duration_ms=duration_ms,
+                    mcp_servers_used=mcp_servers_used,
+                    error=error,
+                )
+                session.add(run)
+                await session.commit()
+                logger.debug(
+                    "RunHistory saved agent_id=%s conversation_id=%s tokens=%d duration_ms=%d",
+                    agent_id, conversation_id, total_tokens, duration_ms,
+                )
+        except Exception as exc:
+            logger.error("Failed to save RunHistory: %s", exc, exc_info=True)
+
 
 def _iso() -> str:
-    from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()

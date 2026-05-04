@@ -4,7 +4,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
-import { MessageSquare, Pencil, Trash2, Loader2 } from 'lucide-react'
+import { MessageSquare, Pencil, Trash2, Loader2, BarChart2 } from 'lucide-react'
 
 import { cn, formatDate } from '@/lib/utils'
 import type { Agent } from '@/lib/types'
@@ -85,6 +85,12 @@ export function AgentCard({ agent }: AgentCardProps) {
           <Link href={`/agents/${agent.id}`}>
             <MessageSquare className="h-4 w-4" />
             Chat
+          </Link>
+        </Button>
+
+        <Button asChild size="sm" variant="secondary">
+          <Link href={`/agents/${agent.id}/stats`} aria-label="View stats">
+            <BarChart2 className="h-4 w-4" />
           </Link>
         </Button>
 
