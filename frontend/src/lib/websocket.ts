@@ -1,6 +1,12 @@
 import type { AgentEvent, MCPOverrideEntry, WSConnectionState } from './types'
 
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000'
+function getWsBase(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL
+  if (typeof window === 'undefined') return 'ws://localhost:8000'
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}`
+}
+const WS_BASE = getWsBase()
 const HEARTBEAT_MS = 25_000
 const MAX_RETRIES = 3
 const PING_INTERVAL_MS = 10_000
