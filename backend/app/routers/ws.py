@@ -68,6 +68,11 @@ async def agent_websocket(
                 )
                 continue
 
+            # Client-side ping for latency measurement — echo it back
+            if payload.get("type") == "ping":
+                await ws_manager.send_event(client_id, {"type": "ping"})
+                continue
+
             message = payload.get("message", "").strip()
             if not message:
                 await ws_manager.send_event(
