@@ -8,7 +8,6 @@ import type { AgentCreate } from '@/lib/types'
 import { AgentCard } from '@/components/agents/AgentCard'
 import { AgentImportExport } from '@/components/agents/AgentImportExport'
 import { Header } from '@/components/layout/Header'
-import { useToast } from '@/components/ui/toast'
 
 function EmptyState() {
   return (
@@ -35,17 +34,13 @@ export default function HomePage() {
   const [search, setSearch] = useState('')
   const { data, isLoading, error } = useAgents()
   const createAgent = useCreateAgent()
-  const { toast } = useToast()
 
   const handleImportAgents = async (agentsToImport: AgentCreate[]) => {
-    let created = 0
     for (const a of agentsToImport) {
       try {
         await createAgent.mutateAsync(a)
-        created++
       } catch {}
     }
-    toast({ title: `Imported ${created} agent${created !== 1 ? 's' : ''}`, variant: 'success' })
   }
 
   const agents = useMemo(() => {
