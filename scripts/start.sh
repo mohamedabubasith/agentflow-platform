@@ -9,9 +9,11 @@ until python -c "
 import asyncio, asyncpg, os, sys
 async def check():
     try:
-        conn = await asyncpg.connect(os.environ['DATABASE_URL'])
+        # Strip SQLAlchemy dialect prefix so asyncpg can parse the URL
+        url = os.environ['DATABASE_URL'].replace('postgresql+asyncpg://', 'postgresql://')
+        conn = await asyncpg.connect(url)
         await conn.close()
-    except Exception as e:
+    except Exception:
         sys.exit(1)
 asyncio.run(check())
 " 2>/dev/null; do
