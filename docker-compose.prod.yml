@@ -19,17 +19,15 @@ services:
       test: ["CMD", "/app/scripts/healthcheck.sh"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 120s
     labels:
       - traefik.enable=true
-      # Route all /api/* to backend (covers HTTP API + WebSocket /api/v1/ws/*)
-      - traefik.http.routers.agentflow-api.rule=Host(`${COOLIFY_FQDN}`) && PathPrefix(`/api`)
+      - traefik.http.routers.agentflow-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)
       - traefik.http.routers.agentflow-api.entrypoints=https
       - traefik.http.routers.agentflow-api.tls=true
       - traefik.http.routers.agentflow-api.tls.certresolver=letsencrypt
       - traefik.http.services.agentflow-api.loadbalancer.server.port=8000
-      # Higher priority so it wins over the catch-all frontend route
       - traefik.http.routers.agentflow-api.priority=10
 
   frontend:
@@ -48,19 +46,18 @@ services:
       - coolify
     labels:
       - traefik.enable=true
-      # Catch-all — everything that isn't /api goes to the frontend
-      - traefik.http.routers.agentflow.rule=Host(`${COOLIFY_FQDN}`)
+      - traefik.http.routers.agentflow.rule=Host(`${DOMAIN}`)
       - traefik.http.routers.agentflow.entrypoints=https
       - traefik.http.routers.agentflow.tls=true
       - traefik.http.routers.agentflow.tls.certresolver=letsencrypt
       - traefik.http.services.agentflow.loadbalancer.server.port=3000
       - traefik.http.routers.agentflow.priority=1
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/',r=>{process.exit(r.statusCode<500?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 60s
 
 networks:
   default:
