@@ -133,11 +133,10 @@ type ToastContextType = {
 
 const ToastContext = React.createContext<ToastContextType | null>(null)
 
+const _noop = () => {}
 export function useToast(): ToastContextType {
   const ctx = React.useContext(ToastContext)
-  if (!ctx) {
-    throw new Error('useToast must be used within a <Toaster /> provider')
-  }
+  if (!ctx) return { toast: _noop }
   return ctx
 }
 
