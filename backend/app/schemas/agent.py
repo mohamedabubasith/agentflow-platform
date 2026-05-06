@@ -68,7 +68,7 @@ class AgentResponse(BaseModel):
     llm_temperature: float
     llm_max_tokens: int
     llm_base_url: Optional[str]
-    llm_api_key: None = None  # never exposed
+    llm_api_key: Optional[str] = None  # always redacted before returning
     mcp_servers: List[MCPServer]
     is_supervisor: bool
     worker_agent_ids: List[uuid.UUID]
