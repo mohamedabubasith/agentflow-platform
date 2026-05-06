@@ -24,7 +24,7 @@ services:
     labels:
       - traefik.enable=true
       # Route all /api/* to backend (covers HTTP API + WebSocket /api/v1/ws/*)
-      - traefik.http.routers.agentflow-api.rule=Host(`agentflow.basivo.in`) && PathPrefix(`/api`)
+      - traefik.http.routers.agentflow-api.rule=Host(`${COOLIFY_FQDN}`) && PathPrefix(`/api`)
       - traefik.http.routers.agentflow-api.entrypoints=https
       - traefik.http.routers.agentflow-api.tls=true
       - traefik.http.routers.agentflow-api.tls.certresolver=letsencrypt
@@ -49,7 +49,7 @@ services:
     labels:
       - traefik.enable=true
       # Catch-all — everything that isn't /api goes to the frontend
-      - traefik.http.routers.agentflow.rule=Host(`agentflow.basivo.in`)
+      - traefik.http.routers.agentflow.rule=Host(`${COOLIFY_FQDN}`)
       - traefik.http.routers.agentflow.entrypoints=https
       - traefik.http.routers.agentflow.tls=true
       - traefik.http.routers.agentflow.tls.certresolver=letsencrypt
