@@ -25,8 +25,6 @@ services:
       - traefik.enable=true
       - traefik.http.routers.agentflow-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)
       - traefik.http.routers.agentflow-api.entrypoints=https
-      - traefik.http.routers.agentflow-api.tls=true
-      - traefik.http.routers.agentflow-api.tls.certresolver=letsencrypt
       - traefik.http.services.agentflow-api.loadbalancer.server.port=8000
       - traefik.http.routers.agentflow-api.priority=10
 
@@ -48,8 +46,6 @@ services:
       - traefik.enable=true
       - traefik.http.routers.agentflow.rule=Host(`${DOMAIN}`)
       - traefik.http.routers.agentflow.entrypoints=https
-      - traefik.http.routers.agentflow.tls=true
-      - traefik.http.routers.agentflow.tls.certresolver=letsencrypt
       - traefik.http.services.agentflow.loadbalancer.server.port=3000
       - traefik.http.routers.agentflow.priority=1
     healthcheck:
